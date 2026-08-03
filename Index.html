@@ -1,0 +1,1219 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Fraction to Decimal AR Challenge</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@300;400;600;700&display=swap" rel="stylesheet">
+    
+    <!-- MediaPipe Hands -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        body {
+            font-family: 'Noto Sans Thai', sans-serif;
+            margin: 0;
+            overflow: hidden; /* Prevent scrolling */
+            background-color: #0f172a;
+            color: white;
+            user-select: none; /* Prevent text selection while dragging */
+            -webkit-user-select: none;
+        }
+
+        /* Video Background */
+        #webcam-video {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover;
+            transform: scaleX(-1); /* Mirror effect */
+            z-index: -10;
+            opacity: 0.8; /* Slightly darken for UI visibility */
+        }
+
+        /* Overlay Canvas for Confetti & AR Cursor */
+        #game-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 50; /* Above UI for effects, but pointer events pass through */
+            pointer-events: none;
+        }
+
+        /* Glassmorphism Utilities */
+        .glass {
+            background: rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+        
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .glass-blue {
+            background: rgba(37, 99, 235, 0.4);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(96, 165, 250, 0.5);
+        }
+
+        .glass-orange {
+            background: rgba(234, 88, 12, 0.4);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(251, 146, 60, 0.5);
+        }
+
+        /* Animations */
+        @keyframes popIn {
+            0% { transform: scale(0.8); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .animate-pop { animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            20%, 60% { transform: translateX(-10px); }
+            40%, 80% { transform: translateX(10px); }
+        }
+        .animate-shake { animation: shake 0.4s ease-in-out; }
+        
+        @keyframes pulse-glow {
+            0% { box-shadow: 0 0 10px rgba(251, 146, 60, 0.5); }
+            50% { box-shadow: 0 0 25px rgba(251, 146, 60, 0.9); }
+            100% { box-shadow: 0 0 10px rgba(251, 146, 60, 0.5); }
+        }
+        .keyboard-selected {
+            animation: pulse-glow 1.5s infinite;
+            border-color: #fb923c !important;
+            transform: scale(1.05);
+        }
+
+        /* Dragging state */
+        .is-dragging {
+            position: fixed !important;
+            z-index: 100 !important;
+            pointer-events: none !important; /* Let pointer events fall through to drop target */
+            transform: translate(-50%, -50%) scale(1.1) !important;
+            transition: none !important;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.5);
+        }
+
+        /* Cards */
+        .answer-card {
+            transition: all 0.2s ease;
+            cursor: grab;
+            position: relative;
+        }
+        .answer-card:active { cursor: grabbing; }
+        .answer-card:hover:not(.is-dragging) {
+            transform: scale(1.05);
+            background: rgba(255, 255, 255, 0.25);
+        }
+
+        /* Drop Zones */
+        .drop-zone {
+            transition: all 0.2s;
+            border: 2px dashed rgba(255,255,255,0.4);
+        }
+        .drop-zone.active-target {
+            background: rgba(255,255,255,0.2);
+            border-color: #4ade80;
+            transform: scale(1.02);
+        }
+
+        /* UI Overlays */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .screen {
+            display: none;
+            width: 100%;
+            height: 100%;
+        }
+        .screen.active {
+            display: flex;
+        }
+
+        /* Scrollbar hide for mobile */
+        ::-webkit-scrollbar { display: none; }
+        
+        /* Keyboard shortcut hint */
+        .kbd-hint {
+            display: inline-block;
+            background: rgba(0,0,0,0.5);
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: 0.75rem;
+            margin-left: 8px;
+        }
+
+        /* Fraction Display */
+        .math-fraction {
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            vertical-align: middle;
+            line-height: 1;
+        }
+        .math-num {
+            padding: 0 0.5rem 0.15rem 0.5rem;
+            min-width: 3rem;
+            text-align: center;
+        }
+        .math-den {
+            border-top: 5px solid currentColor;
+            padding: 0.15rem 0.5rem 0 0.5rem;
+            min-width: 3rem;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Background Video for AR -->
+    <video id="webcam-video" autoplay playsinline></video>
+    
+    <!-- Canvas for VFX and AR Pointer -->
+    <canvas id="game-canvas"></canvas>
+
+    <!-- Main UI Layer -->
+    <div id="ui-layer">
+        
+        <!-- ================= START SCREEN ================= -->
+        <div id="screen-start" class="screen active flex-col items-center justify-center p-4">
+            <div class="glass-panel rounded-3xl p-8 max-w-2xl w-full text-center animate-pop">
+                <div class="inline-block p-4 rounded-full glass-blue mb-4">
+                    <i class="fa-solid fa-vr-cardboard text-5xl text-blue-300"></i>
+                </div>
+                <h1 class="text-4xl md:text-5xl font-bold mb-2 text-transparent bg-clip-text bg-gradient-to-r from-blue-300 to-orange-400">
+                    Fraction to Decimal
+                </h1>
+                <h2 class="text-2xl text-white/80 mb-8 font-semibold tracking-wider">AR Challenge</h2>
+                
+                <p class="mb-8 text-lg text-white/90">เกมจับคู่เศษส่วนและทศนิยม สำหรับชั้นประถมศึกษาปีที่ 6</p>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+                    <button class="level-btn glass p-4 rounded-xl hover:bg-white/30 transition shadow-lg text-green-400 font-bold text-xl" data-level="easy" data-time="120">
+                        ง่าย
+                    </button>
+                    <button class="level-btn glass-blue p-4 rounded-xl hover:bg-blue-500/50 transition shadow-lg text-white font-bold text-xl" data-level="normal" data-time="120">
+                        ปานกลาง
+                    </button>
+                    <button class="level-btn glass-orange p-4 rounded-xl hover:bg-orange-500/50 transition shadow-lg text-white font-bold text-xl" data-level="hard" data-time="120">
+                        ยาก
+                    </button>
+                </div>
+
+                <button id="btn-show-instruction" class="w-full bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-bold py-4 px-8 rounded-full shadow-lg transform transition hover:scale-105 text-xl">
+                    วิธีเล่น / Start
+                </button>
+            </div>
+            
+            <div class="mt-6 flex gap-4">
+                <div class="glass px-4 py-2 rounded-full text-sm">
+                    <i class="fa-solid fa-trophy text-yellow-400 mr-2"></i> High Score: <span id="display-highscore">0</span>
+                </div>
+                <div class="glass px-4 py-2 rounded-full text-sm">
+                    <i class="fa-solid fa-stopwatch text-orange-400 mr-2"></i> Best Time: <span id="display-besttime">-</span>s
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= INSTRUCTION SCREEN ================= -->
+        <div id="screen-instruction" class="screen flex-col items-center justify-center p-4">
+            <div class="glass-panel rounded-3xl p-8 max-w-3xl w-full animate-pop">
+                <h2 class="text-3xl font-bold mb-6 text-center text-blue-300">วิธีเล่นเกม</h2>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 text-left">
+                    <div class="glass p-6 rounded-2xl">
+                        <h3 class="text-xl font-bold text-orange-400 mb-3"><i class="fa-solid fa-hand-pointer mr-2"></i> ระบบ AR (Hand Tracking)</h3>
+                        <p class="text-sm leading-relaxed text-white/80">
+                            1. อนุญาตการใช้งานกล้อง Webcam<br>
+                            2. ยกมือขึ้นหน้ากล้อง<br>
+                            3. <b>หนีบนิ้วชี้และนิ้วโป้ง</b> เพื่อ "จับ" การ์ดคำตอบ<br>
+                            4. ลากไปวางในช่องโจทย์ที่ถูกต้อง แล้ว "ปล่อยนิ้ว"
+                        </p>
+                    </div>
+                    <div class="glass p-6 rounded-2xl">
+                        <h3 class="text-xl font-bold text-blue-400 mb-3"><i class="fa-solid fa-keyboard mr-2"></i> ระบบ คีย์บอร์ด & เมาส์</h3>
+                        <p class="text-sm leading-relaxed text-white/80">
+                            <b>เมาส์ / สัมผัส:</b> คลิกค้างเพื่อลากการ์ดไปวาง<br>
+                            <b>คีย์บอร์ด:</b><br>
+                            กดตัวเลข <b>1, 2 หรือ 3</b> เพื่อเลือกตอบทันที
+                        </p>
+                    </div>
+                </div>
+
+                <div class="flex justify-center gap-4">
+                    <button id="btn-back-home" class="glass px-6 py-3 rounded-full hover:bg-white/20 transition">
+                        กลับ
+                    </button>
+                    <button id="btn-start-game" class="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-8 rounded-full shadow-lg transform transition hover:scale-105 text-lg flex items-center">
+                        <i class="fa-solid fa-play mr-2"></i> เริ่มเกมทันที
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= GAME SCREEN ================= -->
+        <div id="screen-game" class="screen flex-col">
+            <!-- Top HUD -->
+            <div class="p-4 flex justify-between items-start">
+                <div class="flex flex-col gap-2">
+                    <div class="glass px-6 py-2 rounded-full flex items-center gap-3 border-l-4 border-l-blue-400">
+                        <i class="fa-solid fa-star text-yellow-400"></i>
+                        <span class="text-xl font-bold" id="ui-score">0</span>
+                    </div>
+                    <div id="ui-combo-container" class="glass px-4 py-1 rounded-full text-sm text-orange-300 hidden opacity-0 transition-opacity">
+                        <i class="fa-solid fa-fire"></i> Combo x<span id="ui-combo">1</span>
+                    </div>
+                </div>
+
+                <!-- Timer -->
+                <div class="glass px-8 py-3 rounded-full text-2xl font-bold flex items-center gap-3 border-t-4 border-t-orange-500 shadow-lg shadow-orange-500/20">
+                    <i class="fa-regular fa-clock text-orange-400"></i>
+                    <span id="ui-timer">60</span>
+                </div>
+
+                <!-- Controls -->
+                <div class="flex gap-2">
+                    <button class="control-btn glass p-3 rounded-full hover:bg-white/20 tooltip" onclick="toggleMute()" title="Mute (M)">
+                        <i class="fa-solid fa-volume-up" id="icon-mute"></i>
+                    </button>
+                    <button class="control-btn glass p-3 rounded-full hover:bg-white/20 tooltip" onclick="toggleFullscreen()" title="Fullscreen (F)">
+                        <i class="fa-solid fa-expand" id="icon-fullscreen"></i>
+                    </button>
+                    <button class="control-btn glass p-3 rounded-full hover:bg-white/20 text-red-400 tooltip" onclick="returnToMenu()" title="Menu (ESC)">
+                        <i class="fa-solid fa-right-from-bracket"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Main Play Area -->
+            <div class="flex-1 flex flex-col p-4 gap-8 overflow-hidden relative justify-center items-center">
+                
+                <!-- Top: Question -->
+                <div class="w-full flex justify-center p-2" id="questions-container">
+                    <!-- Populated by JS -->
+                </div>
+
+                <!-- Bottom: Answers (Cards) -->
+                <div class="w-full flex flex-wrap justify-center gap-6 p-2" id="answers-container">
+                    <!-- Populated by JS -->
+                </div>
+
+            </div>
+            
+            <!-- AR Status Indicator -->
+            <div id="ar-status" class="absolute bottom-4 left-1/2 transform -translate-x-1/2 glass px-4 py-1 rounded-full text-xs text-white/70 flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" id="ar-indicator-dot"></span>
+                <span id="ar-status-text">กำลังโหลดระบบ AR...</span>
+            </div>
+        </div>
+
+        <!-- ================= RESULT SCREEN ================= -->
+        <div id="screen-result" class="screen flex-col items-center justify-center p-4">
+            <div class="glass-panel rounded-3xl p-8 max-w-2xl w-full text-center relative overflow-hidden">
+                <div class="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-400 to-orange-400"></div>
+                
+                <h2 class="text-4xl font-bold mb-2 text-white">สรุปผลการเล่น</h2>
+                <div class="text-6xl font-black my-6 text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 to-orange-500 drop-shadow-lg" id="result-grade">A</div>
+                
+                <div class="grid grid-cols-2 gap-4 mb-8 text-left">
+                    <div class="glass p-4 rounded-xl flex flex-col">
+                        <span class="text-sm text-white/60">คะแนนรวม</span>
+                        <span class="text-3xl font-bold text-blue-300" id="result-score">0</span>
+                    </div>
+                    <div class="glass p-4 rounded-xl flex flex-col">
+                        <span class="text-sm text-white/60">ความแม่นยำ</span>
+                        <span class="text-3xl font-bold text-green-300" id="result-percent">0%</span>
+                    </div>
+                    <div class="glass p-4 rounded-xl flex flex-col">
+                        <span class="text-sm text-white/60">ตอบถูก / ผิด</span>
+                        <span class="text-xl font-bold"><span class="text-green-400" id="result-correct">0</span> / <span class="text-red-400" id="result-wrong">0</span></span>
+                    </div>
+                    <div class="glass p-4 rounded-xl flex flex-col">
+                        <span class="text-sm text-white/60">คอมโบสูงสุด</span>
+                        <span class="text-xl font-bold text-orange-400">x<span id="result-maxcombo">0</span></span>
+                    </div>
+                </div>
+
+                <div class="flex flex-col sm:flex-row justify-center gap-4">
+                    <button onclick="returnToMenu()" class="glass px-8 py-4 rounded-full font-bold hover:bg-white/20 transition text-lg w-full sm:w-auto">
+                        <i class="fa-solid fa-home mr-2"></i> เมนูหลัก
+                    </button>
+                    <button onclick="restartGame()" class="bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white font-bold py-4 px-8 rounded-full shadow-lg transform transition hover:scale-105 text-lg w-full sm:w-auto flex justify-center items-center">
+                        <i class="fa-solid fa-rotate-right mr-2"></i> เล่นอีกครั้ง <kbd class="kbd-hint">R</kbd>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        /**
+         * ==========================================
+         * GAME DATA & CONFIGURATION
+         * ==========================================
+         */
+        const fractionDataEasy = [
+            { f: "3/10", d: "0.3" }, { f: "7/10", d: "0.7" }, { f: "9/10", d: "0.9" },
+            { f: "21/100", d: "0.21" }, { f: "45/100", d: "0.45" }, { f: "99/100", d: "0.99" },
+            { f: "7/100", d: "0.07" }, { f: "1/100", d: "0.01" },
+            { f: "123/1000", d: "0.123" }, { f: "456/1000", d: "0.456" }, { f: "809/1000", d: "0.809" },
+            { f: "55/1000", d: "0.055" }, { f: "9/1000", d: "0.009" }
+        ];
+
+        const fractionDataNormal = [
+            ...fractionDataEasy,
+            { f: "15/10", d: "1.5" }, { f: "32/10", d: "3.2" }, { f: "105/10", d: "10.5" },
+            { f: "125/100", d: "1.25" }, { f: "345/100", d: "3.45" }, { f: "208/100", d: "2.08" },
+            { f: "1450/1000", d: "1.45" }, { f: "2005/1000", d: "2.005" }, { f: "5050/1000", d: "5.05" }
+        ];
+        
+        const fractionDataHard = [
+            { f: "1/2", d: "0.5" }, { f: "1/4", d: "0.25" }, { f: "3/4", d: "0.75" },
+            { f: "1/5", d: "0.2" }, { f: "2/5", d: "0.4" }, { f: "3/5", d: "0.6" }, { f: "4/5", d: "0.8" },
+            { f: "1/8", d: "0.125" }, { f: "3/8", d: "0.375" }, { f: "5/8", d: "0.625" }, { f: "7/8", d: "0.875" },
+            { f: "1/3", d: "0.33" }, { f: "2/3", d: "0.67" },
+            { f: "11/2", d: "5.5" }, { f: "15/4", d: "3.75" }, { f: "21/8", d: "2.625" }
+        ];
+
+        let gameState = {
+            isPlaying: false,
+            level: 'normal', // easy, normal, hard
+            maxTime: 120, // fixed to 120 for all levels
+            currentTime: 120,
+        };
+
+        let appState = {
+            highScore: parseInt(localStorage.getItem('arMathHighScore')) || 0,
+            bestTime: parseInt(localStorage.getItem('arMathBestTime')) || 999,
+            isMuted: false
+        };
+
+        // Pointer state for unified drag & drop (AR, Mouse, Touch)
+        let pointer = { x: 0, y: 0, isDown: false, source: 'none' };
+        let draggedCard = null;
+        let dragOffset = { x: 0, y: 0 };
+        let hoveredDropZone = null;
+        
+        // Keyboard State
+        let keyboardState = {
+            selectedCardId: null,
+            selectedSlotIndex: 0
+        };
+
+        /**
+         * ==========================================
+         * AUDIO ENGINE (Web Audio API)
+         * ==========================================
+         */
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        let audioCtx;
+
+        const initAudio = () => {
+            if (!audioCtx) audioCtx = new AudioContext();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+        };
+
+        const playSound = (type) => {
+            if (appState.isMuted || !audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            osc.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            const now = audioCtx.currentTime;
+            
+            switch(type) {
+                case 'hover':
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(600, now);
+                    gainNode.gain.setValueAtTime(0.05, now);
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+                    osc.start(now);
+                    osc.stop(now + 0.1);
+                    break;
+                case 'click':
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(800, now);
+                    osc.frequency.exponentialRampToValueAtTime(400, now + 0.05);
+                    gainNode.gain.setValueAtTime(0.1, now);
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+                    osc.start(now);
+                    osc.stop(now + 0.05);
+                    break;
+                case 'correct':
+                    osc.type = 'square';
+                    // Arpeggio
+                    osc.frequency.setValueAtTime(440, now); // A4
+                    osc.frequency.setValueAtTime(554.37, now + 0.1); // C#5
+                    osc.frequency.setValueAtTime(659.25, now + 0.2); // E5
+                    osc.frequency.setValueAtTime(880, now + 0.3); // A5
+                    
+                    gainNode.gain.setValueAtTime(0, now);
+                    gainNode.gain.linearRampToValueAtTime(0.1, now + 0.05);
+                    gainNode.gain.setValueAtTime(0.1, now + 0.3);
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+                    
+                    osc.start(now);
+                    osc.stop(now + 0.6);
+                    break;
+                case 'wrong':
+                    osc.type = 'sawtooth';
+                    osc.frequency.setValueAtTime(150, now);
+                    osc.frequency.linearRampToValueAtTime(100, now + 0.3);
+                    gainNode.gain.setValueAtTime(0.1, now);
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+                    osc.start(now);
+                    osc.stop(now + 0.3);
+                    break;
+                case 'finish':
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(523.25, now); // C5
+                    osc.frequency.setValueAtTime(659.25, now + 0.15); // E5
+                    osc.frequency.setValueAtTime(783.99, now + 0.3); // G5
+                    osc.frequency.setValueAtTime(1046.50, now + 0.45); // C6
+                    gainNode.gain.setValueAtTime(0.1, now);
+                    gainNode.gain.linearRampToValueAtTime(0, now + 1.5);
+                    osc.start(now);
+                    osc.stop(now + 1.5);
+                    break;
+            }
+        };
+
+        const els = {
+            screens: document.querySelectorAll('.screen'),
+            start: document.getElementById('screen-start'),
+            instruction: document.getElementById('screen-instruction'),
+            game: document.getElementById('screen-game'),
+            result: document.getElementById('screen-result'),
+            
+            btnLevel: document.querySelectorAll('.level-btn'),
+            btnShowInst: document.getElementById('btn-show-instruction'),
+            btnBackHome: document.getElementById('btn-back-home'),
+            btnStartGame: document.getElementById('btn-start-game'),
+            
+            qContainer: document.getElementById('questions-container'),
+            aContainer: document.getElementById('answers-container'),
+            
+            uiScore: document.getElementById('ui-score'),
+            uiTimer: document.getElementById('ui-timer'),
+            uiCombo: document.getElementById('ui-combo'),
+            uiComboContainer: document.getElementById('ui-combo-container'),
+            
+            canvas: document.getElementById('game-canvas'),
+            ctx: document.getElementById('game-canvas').getContext('2d'),
+            video: document.getElementById('webcam-video'),
+            
+            arStatus: document.getElementById('ar-status-text'),
+            arIndicator: document.getElementById('ar-indicator-dot')
+        };
+
+        const switchScreen = (screenId) => {
+            els.screens.forEach(s => s.classList.remove('active'));
+            document.getElementById(screenId).classList.add('active');
+            playSound('click');
+        };
+
+        const updateDisplay = () => {
+            document.getElementById('display-highscore').innerText = appState.highScore;
+            document.getElementById('display-besttime').innerText = appState.bestTime === 999 ? '-' : appState.bestTime;
+        };
+        updateDisplay();
+
+        // Canvas Setup
+        const resizeCanvas = () => {
+            els.canvas.width = window.innerWidth;
+            els.canvas.height = window.innerHeight;
+        };
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        /**
+         * ==========================================
+         * GAME LOGIC
+         * ==========================================
+         */
+        const shuffleArray = (array) => {
+            let curId = array.length;
+            while (0 !== curId) {
+                let randId = Math.floor(Math.random() * curId);
+                curId -= 1;
+                let tmp = array[curId];
+                array[curId] = array[randId];
+                array[randId] = tmp;
+            }
+            return array;
+        };
+
+        const generateRound = () => {
+            // Select data based on level
+            let activeData = fractionDataNormal;
+            if (gameState.level === 'easy') activeData = fractionDataEasy;
+            if (gameState.level === 'hard') activeData = fractionDataHard;
+
+            // Pick 1 random question
+            let target = activeData[Math.floor(Math.random() * activeData.length)];
+            gameState.currentQuestion = { f: target.f, d: target.d, answered: false };
+            
+            // Pick 2 distinct wrong answers
+            let distractors = [];
+            let availableWrong = activeData.filter(item => item.d !== target.d);
+            let shuffledWrong = shuffleArray([...availableWrong]);
+            
+            distractors.push(shuffledWrong[0]);
+            if (shuffledWrong.length > 1) {
+                distractors.push(shuffledWrong[1]);
+            } else {
+                // Fallback if not enough data
+                distractors.push({ d: (parseFloat(target.d) + 0.1).toFixed(2) });
+            }
+
+            let roundAnswers = [target, distractors[0], distractors[1]];
+            gameState.answers = shuffleArray([...roundAnswers]);
+
+            renderPlayArea();
+            keyboardState.selectedCardId = null;
+            keyboardState.selectedSlotIndex = 0;
+            updateKeyboardUI();
+        };
+
+        const renderPlayArea = () => {
+            els.qContainer.innerHTML = '';
+            els.aContainer.innerHTML = '';
+
+            // Render 1 Question with vertical fraction
+            const q = gameState.currentQuestion;
+            const [num, den] = q.f.split('/');
+            
+            const qDiv = document.createElement('div');
+            qDiv.className = `glass-panel p-8 md:p-12 rounded-3xl flex items-center justify-center shadow-2xl relative gap-6 md:gap-10 border-2 border-white/20 ${q.answered ? 'opacity-60 transform scale-95 transition-all' : 'animate-pop'}`;
+            qDiv.innerHTML = `
+                <div class="text-6xl md:text-8xl font-bold text-blue-300 math-fraction">
+                    <span class="math-num">${num}</span>
+                    <span class="math-den">${den}</span>
+                </div>
+                <div class="text-5xl md:text-6xl text-white/50 font-bold">=</div>
+                <div class="drop-zone w-40 md:w-56 h-28 md:h-36 rounded-2xl flex items-center justify-center text-white/40 border-4 border-dashed border-white/30 transition bg-black/20" data-index="0" data-answer="${q.d}">
+                    ${q.answered ? `<span class="text-5xl md:text-6xl font-bold text-green-400 drop-shadow-lg">${q.d}</span>` : '<span class="text-lg md:text-xl">วางที่นี่</span>'}
+                </div>
+                <!-- Keyboard indicator -->
+                <div class="kbd-indicator absolute -right-6 top-1/2 transform -translate-y-1/2 text-orange-400 hidden">
+                    <i class="fa-solid fa-caret-left text-4xl"></i>
+                </div>
+            `;
+            els.qContainer.appendChild(qDiv);
+
+            // Render 3 Answers
+            gameState.answers.forEach((a, index) => {
+                if(q.answered && q.d === a.d) return;
+
+                const cardId = `card-${index}`;
+                const aDiv = document.createElement('div');
+                aDiv.className = `answer-card glass-blue p-8 md:p-10 rounded-2xl flex flex-col items-center justify-center shadow-xl transform transition select-none z-10 w-32 md:w-48 animate-pop border-2 border-blue-400/30`;
+                aDiv.style.animationDelay = `${index * 0.1}s`;
+                aDiv.id = cardId;
+                aDiv.dataset.value = a.d;
+                aDiv.dataset.kbdNum = index + 1;
+                
+                aDiv.innerHTML = `
+                    <span class="text-4xl md:text-5xl font-bold text-white pointer-events-none drop-shadow">${a.d}</span>
+                    <span class="absolute bottom-2 right-3 text-xs md:text-sm font-bold text-white/80 bg-black/40 px-2 py-1 rounded pointer-events-none">${index + 1}</span>
+                `;
+
+                aDiv.addEventListener('mousedown', (e) => startDrag(e, aDiv, 'mouse'));
+                aDiv.addEventListener('touchstart', (e) => { e.preventDefault(); startDrag(e.touches[0], aDiv, 'touch'); }, {passive: false});
+                
+                aDiv.addEventListener('mouseenter', () => playSound('hover'));
+
+                els.aContainer.appendChild(aDiv);
+            });
+            
+            updateKeyboardUI();
+        };
+
+        const startDrag = (event, element, source) => {
+            if (draggedCard) return;
+            initAudio(); // Ensure audio context is alive
+            
+            pointer.isDown = true;
+            pointer.source = source;
+            draggedCard = element;
+            
+            // Calculate offset
+            const rect = draggedCard.getBoundingClientRect();
+            dragOffset.x = event.clientX - rect.left;
+            dragOffset.y = event.clientY - rect.top;
+
+            // Styling for drag
+            draggedCard.classList.add('is-dragging');
+            draggedCard.style.width = `${rect.width}px`;
+            draggedCard.style.height = `${rect.height}px`;
+            
+            // Move to body to avoid container constraints
+            document.body.appendChild(draggedCard);
+            moveDrag(event);
+            playSound('click');
+        };
+
+        const moveDrag = (event) => {
+            if (!draggedCard) return;
+            
+            const x = event.clientX;
+            const y = event.clientY;
+            
+            draggedCard.style.left = `${x}px`;
+            draggedCard.style.top = `${y}px`;
+
+            // Check hover over drop zones
+            checkDropZoneHover(x, y);
+        };
+
+        const checkDropZoneHover = (x, y) => {
+            // Hide dragged card temporarily to get element underneath
+            draggedCard.style.visibility = 'hidden';
+            const elUnderPointer = document.elementFromPoint(x, y);
+            draggedCard.style.visibility = 'visible';
+
+            // Find closest drop-zone
+            const dropZone = elUnderPointer ? elUnderPointer.closest('.drop-zone') : null;
+            
+            // Remove active class from old hover
+            if (hoveredDropZone && hoveredDropZone !== dropZone) {
+                hoveredDropZone.classList.remove('active-target');
+            }
+            
+            if (dropZone && !gameState.currentQuestion.answered) {
+                hoveredDropZone = dropZone;
+                hoveredDropZone.classList.add('active-target');
+            } else {
+                hoveredDropZone = null;
+            }
+        };
+
+        const endDrag = () => {
+            if (!draggedCard) return;
+            pointer.isDown = false;
+            
+            const val = draggedCard.dataset.value;
+            let matched = false;
+
+            if (hoveredDropZone) {
+                const targetVal = hoveredDropZone.dataset.answer;
+                
+                if (val === targetVal) {
+                    // Correct!
+                    handleCorrect(hoveredDropZone);
+                    matched = true;
+                    draggedCard.remove(); // Remove card
+                } else {
+                    // Wrong!
+                    handleWrong(hoveredDropZone);
+                }
+                hoveredDropZone.classList.remove('active-target');
+                hoveredDropZone = null;
+            }
+
+            if (!matched) {
+                // Return to container if not matched
+                draggedCard.classList.remove('is-dragging');
+                draggedCard.style.position = '';
+                draggedCard.style.left = '';
+                draggedCard.style.top = '';
+                draggedCard.style.width = '';
+                draggedCard.style.height = '';
+                els.aContainer.appendChild(draggedCard);
+            }
+            
+            draggedCard = null;
+        };
+
+        // Global Mouse/Touch Listeners
+        window.addEventListener('mousemove', (e) => {
+            if(pointer.source === 'mouse') moveDrag(e);
+        });
+        window.addEventListener('mouseup', (e) => {
+            if(pointer.source === 'mouse') endDrag();
+        });
+        window.addEventListener('touchmove', (e) => {
+            if(pointer.source === 'touch') moveDrag(e.touches[0]);
+        }, {passive: false});
+        window.addEventListener('touchend', (e) => {
+            if(pointer.source === 'touch') endDrag();
+        });
+
+        const handleCorrect = (element) => {
+            playSound('correct');
+            createConfetti(element.getBoundingClientRect());
+            
+            gameState.currentQuestion.answered = true;
+            gameState.correctCount++;
+            gameState.totalQuestionsPlayed++;
+            
+            // Combo logic
+            gameState.combo++;
+            if (gameState.combo > gameState.maxCombo) gameState.maxCombo = gameState.combo;
+            
+            let multiplier = 1;
+            if (gameState.combo >= 5) multiplier = 5;
+            else if (gameState.combo >= 3) multiplier = 3;
+            else if (gameState.combo >= 2) multiplier = 2;
+
+            gameState.score += (10 * multiplier);
+            
+            updateHUD();
+            
+            // Animate element
+            element.innerHTML = `<span class="text-5xl md:text-6xl font-bold text-green-400 drop-shadow-lg">${gameState.currentQuestion.d}</span>`;
+            element.parentElement.classList.add('opacity-60', 'scale-95');
+            
+            // Generate next question automatically
+            setTimeout(generateRound, 800);
+        };
+
+        const handleWrong = (element) => {
+            playSound('wrong');
+            gameState.combo = 0;
+            gameState.wrongCount++;
+            updateHUD();
+            
+            element.parentElement.classList.add('animate-shake');
+            element.classList.add('border-red-500', 'bg-red-500/20');
+            
+            setTimeout(() => {
+                element.parentElement.classList.remove('animate-shake');
+                element.classList.remove('border-red-500', 'bg-red-500/20');
+            }, 400);
+        };
+
+        const updateHUD = () => {
+            els.uiScore.innerText = gameState.score;
+            
+            if (gameState.combo > 1) {
+                els.uiCombo.innerText = gameState.combo;
+                els.uiComboContainer.classList.remove('hidden', 'opacity-0');
+                
+                // Pop animation
+                els.uiComboContainer.classList.remove('animate-pop');
+                void els.uiComboContainer.offsetWidth; // trigger reflow
+                els.uiComboContainer.classList.add('animate-pop');
+            } else {
+                els.uiComboContainer.classList.add('opacity-0');
+            }
+        };
+
+        const startTimer = () => {
+            gameState.currentTime = gameState.maxTime;
+            els.uiTimer.innerText = gameState.currentTime;
+            els.uiTimer.parentElement.classList.remove('text-red-500', 'animate-pulse');
+            
+            if(gameState.timerInterval) clearInterval(gameState.timerInterval);
+            
+            gameState.timerInterval = setInterval(() => {
+                gameState.currentTime--;
+                els.uiTimer.innerText = gameState.currentTime;
+                
+                if (gameState.currentTime <= 10) {
+                    els.uiTimer.parentElement.classList.add('text-red-500', 'animate-pulse');
+                }
+                
+                if (gameState.currentTime <= 0) {
+                    endGame();
+                }
+            }, 1000);
+        };
+
+        const startGame = () => {
+            initAudio();
+            gameState.isPlaying = true;
+            gameState.score = 0;
+            gameState.combo = 0;
+            gameState.maxCombo = 0;
+            gameState.correctCount = 0;
+            gameState.wrongCount = 0;
+            gameState.totalQuestionsPlayed = 0;
+            
+            updateHUD();
+            switchScreen('screen-game');
+            
+            // Init AR if not already done
+            if (!cameraUtils.camera) {
+                initMediaPipe();
+            }
+
+            generateRound();
+            startTimer();
+        };
+
+        const endGame = () => {
+            gameState.isPlaying = false;
+            clearInterval(gameState.timerInterval);
+            playSound('finish');
+            
+            // Calculate stats
+            let total = gameState.correctCount + gameState.wrongCount;
+            let percent = total === 0 ? 0 : Math.round((gameState.correctCount / total) * 100);
+            let grade = 'C';
+            if (percent >= 80) grade = 'A';
+            else if (percent >= 50) grade = 'B';
+            
+            // Update LocalStorage
+            if (gameState.score > appState.highScore) {
+                appState.highScore = gameState.score;
+                localStorage.setItem('arMathHighScore', appState.highScore);
+            }
+            
+            const timeTaken = gameState.maxTime - gameState.currentTime;
+            // Only save best time if they actually played and scored
+            if (gameState.score > 0 && timeTaken < appState.bestTime) {
+                appState.bestTime = timeTaken;
+                localStorage.setItem('arMathBestTime', appState.bestTime);
+            }
+
+            // Bind to UI
+            document.getElementById('result-score').innerText = gameState.score;
+            document.getElementById('result-percent').innerText = `${percent}%`;
+            document.getElementById('result-correct').innerText = gameState.correctCount;
+            document.getElementById('result-wrong').innerText = gameState.wrongCount;
+            document.getElementById('result-maxcombo').innerText = gameState.maxCombo;
+            document.getElementById('result-grade').innerText = grade;
+            
+            // Colors for grade
+            const gradeEl = document.getElementById('result-grade');
+            gradeEl.className = 'text-6xl font-black my-6 text-transparent bg-clip-text drop-shadow-lg ';
+            if(grade === 'A') gradeEl.classList.add('bg-gradient-to-r', 'from-green-400', 'to-emerald-600');
+            if(grade === 'B') gradeEl.classList.add('bg-gradient-to-r', 'from-yellow-300', 'to-orange-500');
+            if(grade === 'C') gradeEl.classList.add('bg-gradient-to-r', 'from-red-400', 'to-rose-600');
+
+            switchScreen('screen-result');
+        };
+
+        const restartGame = () => {
+            startGame();
+        };
+
+        const returnToMenu = () => {
+            gameState.isPlaying = false;
+            clearInterval(gameState.timerInterval);
+            updateDisplay();
+            switchScreen('screen-start');
+            // We keep AR running in background to avoid slow restarts
+        };
+
+        
+        let cameraUtils = { camera: null, hands: null };
+        let arPointer = { x: 0, y: 0, pinched: false };
+
+        const initMediaPipe = async () => {
+            els.arStatus.innerText = "กำลังเริ่มกล้อง...";
+            els.arIndicator.classList.replace('bg-yellow-400', 'bg-orange-400');
+            
+            try {
+                const hands = new Hands({locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+                }});
+                
+                hands.setOptions({
+                    maxNumHands: 1,
+                    modelComplexity: 1,
+                    minDetectionConfidence: 0.6,
+                    minTrackingConfidence: 0.6
+                });
+                
+                hands.onResults(onARResults);
+                
+                const camera = new Camera(els.video, {
+                    onFrame: async () => {
+                        await hands.send({image: els.video});
+                    },
+                    width: 1280,
+                    height: 720
+                });
+                
+                await camera.start();
+                
+                cameraUtils.camera = camera;
+                cameraUtils.hands = hands;
+                
+                els.arStatus.innerText = "AR พร้อมทำงาน";
+                els.arIndicator.classList.replace('bg-orange-400', 'bg-green-400');
+                els.arIndicator.classList.remove('animate-pulse');
+                
+            } catch (err) {
+                console.error("Camera access denied or MediaPipe error:", err);
+                els.arStatus.innerText = "ไม่สามารถเข้าถึงกล้องได้ เล่นด้วยเมาส์แทน";
+                els.arIndicator.classList.replace('bg-orange-400', 'bg-red-500');
+            }
+        };
+
+        const onARResults = (results) => {
+            if (!gameState.isPlaying) return;
+
+            // Clear AR context area each frame, handled in render loop normally
+            // Extract landmarks
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                
+                // Get Thumb tip (4) and Index tip (8)
+                const thumb = landmarks[4];
+                const index = landmarks[8];
+                
+                // Map to screen (mirror X)
+                const sx = (1 - index.x) * window.innerWidth;
+                const sy = index.y * window.innerHeight;
+                
+                arPointer.x = sx;
+                arPointer.y = sy;
+
+                // Calculate pinch distance (3D space calculation)
+                const dx = thumb.x - index.x;
+                const dy = thumb.y - index.y;
+                const dz = thumb.z - index.z;
+                const distance = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                
+                // Threshold for pinch
+                const isPinched = distance < 0.05;
+
+                // Handle AR Drag State Transition
+                if (isPinched && !arPointer.pinched) {
+                    // Just pinched -> simulate mousedown
+                    arPointer.pinched = true;
+                    // Find element under pointer
+                    const elUnderPointer = document.elementFromPoint(sx, sy);
+                    const card = elUnderPointer ? elUnderPointer.closest('.answer-card') : null;
+                    
+                    if (card && !draggedCard) {
+                        // Create mock event for startDrag
+                        startDrag({clientX: sx, clientY: sy}, card, 'ar');
+                    }
+                } 
+                else if (!isPinched && arPointer.pinched) {
+                    // Just released -> simulate mouseup
+                    arPointer.pinched = false;
+                    if (pointer.source === 'ar') {
+                        endDrag();
+                    }
+                }
+                
+                // Move drag if active from AR
+                if (pointer.source === 'ar' && draggedCard) {
+                    moveDrag({clientX: sx, clientY: sy});
+                }
+            } else {
+                // Hand lost
+                if (pointer.source === 'ar' && arPointer.pinched) {
+                    arPointer.pinched = false;
+                    endDrag();
+                }
+            }
+        };
+
+        
+        let particles = [];
+        
+        const createConfetti = (rect) => {
+            const x = rect.left + rect.width / 2;
+            const y = rect.top + rect.height / 2;
+            const colors = ['#4ade80', '#fb923c', '#60a5fa', '#facc15', '#ffffff'];
+            
+            for (let i = 0; i < 30; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    vx: (Math.random() - 0.5) * 15,
+                    vy: (Math.random() - 0.5) * 15 - 5,
+                    size: Math.random() * 8 + 4,
+                    color: colors[Math.floor(Math.random() * colors.length)],
+                    life: 1,
+                    decay: Math.random() * 0.02 + 0.01
+                });
+            }
+        };
+
+        const renderLoop = () => {
+            els.ctx.clearRect(0, 0, els.canvas.width, els.canvas.height);
+            
+            // 1. Draw Confetti Particles
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                els.ctx.globalAlpha = p.life;
+                els.ctx.fillStyle = p.color;
+                els.ctx.beginPath();
+                // Draw square confetti
+                els.ctx.translate(p.x, p.y);
+                els.ctx.rotate(p.life * 10);
+                els.ctx.fillRect(-p.size/2, -p.size/2, p.size, p.size);
+                els.ctx.setTransform(1, 0, 0, 1, 0, 0); // reset transform
+                
+                p.x += p.vx;
+                p.y += p.vy;
+                p.vy += 0.5; // gravity
+                p.life -= p.decay;
+                
+                if (p.life <= 0) particles.splice(i, 1);
+            }
+            els.ctx.globalAlpha = 1.0;
+
+            // 2. Draw AR Cursor if game is playing
+            if (gameState.isPlaying && cameraUtils.hands) {
+                els.ctx.beginPath();
+                els.ctx.arc(arPointer.x, arPointer.y, arPointer.pinched ? 12 : 20, 0, Math.PI * 2);
+                els.ctx.fillStyle = arPointer.pinched ? 'rgba(74, 222, 128, 0.7)' : 'rgba(255, 255, 255, 0.3)';
+                els.ctx.fill();
+                els.ctx.lineWidth = 2;
+                els.ctx.strokeStyle = arPointer.pinched ? '#22c55e' : '#ffffff';
+                els.ctx.stroke();
+            }
+
+            requestAnimationFrame(renderLoop);
+        };
+        requestAnimationFrame(renderLoop);
+
+        
+        const updateKeyboardUI = () => {
+            // Update Card Highlight
+            document.querySelectorAll('.answer-card').forEach(card => {
+                if (card.id === keyboardState.selectedCardId) {
+                    card.classList.add('keyboard-selected');
+                } else {
+                    card.classList.remove('keyboard-selected');
+                }
+            });
+        };
+
+        const tryKeyboardSubmit = (cardId) => {
+            if (!cardId) return;
+            const cardEl = document.getElementById(cardId);
+            const targetZone = document.querySelector('.drop-zone');
+
+            if (!cardEl || !targetZone) return;
+            if (gameState.currentQuestion.answered) return;
+
+            const val = cardEl.dataset.value;
+            const targetVal = targetZone.dataset.answer;
+
+            if (val === targetVal) {
+                handleCorrect(targetZone);
+                cardEl.remove();
+            } else {
+                handleWrong(targetZone);
+            }
+            keyboardState.selectedCardId = null;
+            updateKeyboardUI();
+        };
+
+        window.addEventListener('keydown', (e) => {
+            const key = e.key.toUpperCase();
+            
+            // Global Shortcuts
+            if (key === 'M') { toggleMute(); return; }
+            if (key === 'F') { toggleFullscreen(); return; }
+            if (key === 'R' && (els.game.classList.contains('active') || els.result.classList.contains('active'))) { restartGame(); return; }
+            if (key === 'ESCAPE') { returnToMenu(); return; }
+
+            // Gameplay Shortcuts
+            if (gameState.isPlaying && !draggedCard && !gameState.currentQuestion.answered) {
+                // Select and submit Card by Number 1-3
+                if (key >= '1' && key <= '3') {
+                    const cards = Array.from(document.querySelectorAll('.answer-card'));
+                    const targetCard = cards.find(c => c.dataset.kbdNum === key);
+                    if (targetCard) {
+                        keyboardState.selectedCardId = targetCard.id;
+                        playSound('click');
+                        updateKeyboardUI();
+                        // Add a tiny delay for visual feedback before submitting
+                        setTimeout(() => {
+                            tryKeyboardSubmit(targetCard.id);
+                        }, 100);
+                    }
+                }
+            }
+        });
+
+        // Toggle Functions
+        const toggleMute = () => {
+            appState.isMuted = !appState.isMuted;
+            const icon = document.getElementById('icon-mute');
+            if (appState.isMuted) {
+                icon.classList.replace('fa-volume-up', 'fa-volume-xmark');
+                icon.classList.add('text-red-400');
+            } else {
+                icon.classList.replace('fa-volume-xmark', 'fa-volume-up');
+                icon.classList.remove('text-red-400');
+                initAudio();
+                playSound('click');
+            }
+        };
+
+        const toggleFullscreen = () => {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(err => {
+                    console.log(`Error attempting to enable full-screen mode: ${err.message}`);
+                });
+                document.getElementById('icon-fullscreen').classList.replace('fa-expand', 'fa-compress');
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                    document.getElementById('icon-fullscreen').classList.replace('fa-compress', 'fa-expand');
+                }
+            }
+            playSound('click');
+        };
+
+        
+        els.btnLevel.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                playSound('click');
+                // visual selection
+                els.btnLevel.forEach(b => b.classList.remove('ring-4', 'ring-white', 'scale-105'));
+                btn.classList.add('ring-4', 'ring-white', 'scale-105');
+                
+                gameState.level = btn.dataset.level;
+                gameState.maxTime = parseInt(btn.dataset.time);
+            });
+        });
+
+        // Default selection
+        els.btnLevel[1].click();
+
+        els.btnShowInst.addEventListener('click', () => switchScreen('screen-instruction'));
+        els.btnBackHome.addEventListener('click', () => switchScreen('screen-start'));
+        els.btnStartGame.addEventListener('click', startGame);
+
+    </script>
+</body>
+</html>
